@@ -22,13 +22,18 @@ def update_rover(Rover, data):
             samples_ypos = np.int_([convert_to_float(pos.strip()) for pos in data["samples_y"].split(';')])
             Rover.samples_pos = (samples_xpos, samples_ypos)
             Rover.samples_to_find = np.int(data["sample_count"])
+            Rover.worldmap3[samples_ypos, samples_xpos, 0] = 255
+            Rover.worldmap3[samples_ypos-1, samples_xpos-1, 0] = 255
+            Rover.worldmap3[samples_ypos+1, samples_xpos+1, 0] = 255
+            Rover.worldmap3[samples_ypos-1, samples_xpos+1, 0] = 255
+            Rover.worldmap3[samples_ypos+1, samples_xpos-1, 0] = 255
       # Or just update elapsed time
       else:
             tot_time = time.time() - Rover.start_time
-            if np.isfinite(tot_time):
+            if np.isfinite(tot_time) and not Rover.arrived:
                   Rover.total_time = tot_time
       # Print out the fields in the telemetry data dictionary
-      print(data.keys())
+      #XXX print(data.keys())
       # The current speed of the rover in m/s
       Rover.vel = convert_to_float(data["speed"])
       # The current position of the rover
@@ -50,11 +55,13 @@ def update_rover(Rover, data):
       # Update number of rocks collected
       Rover.samples_collected = Rover.samples_to_find - np.int(data["sample_count"])
 
+      """ XXX
       print('speed =',Rover.vel, 'position =', Rover.pos, 'throttle =', 
       Rover.throttle, 'steer_angle =', Rover.steer, 'near_sample:', Rover.near_sample, 
       'picking_up:', data["picking_up"], 'sending pickup:', Rover.send_pickup, 
       'total time:', Rover.total_time, 'samples remaining:', data["sample_count"], 
       'samples collected:', Rover.samples_collected)
+      """
       # Get the current image from the center camera of the rover
       imgString = data["image"]
       image = Image.open(BytesIO(base64.b64decode(imgString)))
@@ -72,6 +79,7 @@ def create_output_images(Rover):
             navigable = Rover.worldmap[:,:,2] * (255 / np.mean(Rover.worldmap[nav_pix, 2]))
       else: 
             navigable = Rover.worldmap[:,:,2]
+
       if np.max(Rover.worldmap[:,:,0]) > 0:
             obs_pix = Rover.worldmap[:,:,0] > 0
             obstacle = Rover.worldmap[:,:,0] * (255 / np.mean(Rover.worldmap[obs_pix, 0]))
@@ -145,13 +153,86 @@ def create_output_images(Rover):
       buff = BytesIO()
       pil_img.save(buff, format="JPEG")
       encoded_string1 = base64.b64encode(buff.getvalue()).decode("utf-8")
-      
-      pil_img = Image.fromarray(Rover.vision_image.astype(np.uint8))
+
+
+      vision_add = cv2.addWeighted(Rover.vision_image, 1, Rover.vision_image2, 0.5, 0)
+      pil_img = Image.fromarray(vision_add.astype(np.uint8))
       buff = BytesIO()
       pil_img.save(buff, format="JPEG")
       encoded_string2 = base64.b64encode(buff.getvalue()).decode("utf-8")
 
       return encoded_string1, encoded_string2
 
+def a_star_search(grid, init, goal, cost=1, heuristic=None):
+    """
+    grid: 1 - path, 0 - occupied
+    return: 1 - path
+    """
+    delta = np.array(
+        [[-1, 0 ], # go up
+         [ 0, -1], # go left
+         [ 1, 0 ], # go down
+         [ 0, 1 ]]) # go right
 
+    y, x = init
+    g = 0
+    if heuristic is not None:
+        f = g + heuristic[y, x]
+    else:
+        f = g
+    open = [[f, g, y, x]]
+    
+    closed = np.zeros_like(grid, dtype=np.int)
+    closed[y, x] = 1
+    expand = np.zeros_like(grid, dtype=np.int)
+    expand[:,:] = -1
+    action = np.zeros_like(grid, dtype=np.int)
+    action[:,:] = -1
+    policy = np.zeros_like(grid, dtype=np.int)
+    
+    found = False  # flag that is set when search is complete
+    resign = False # flag set if we can't find expand
+    count = 0
+    
+    while not found and not resign:
+        if len(open) == 0:
+            resign = True
+            print('resign')
+            policy[:,:] = 0
+            return policy
+        else:
+            open.sort()
+            open.reverse()
+            next = open.pop()
+            f, g, y, x = next
+            
+            expand[y, x] = count
+            count += 1
 
+            if y == goal[0] and x == goal[1]:
+                found = True
+            else:
+                for i in range(len(delta)):
+                    y2 = y + delta[i][0]
+                    x2 = x + delta[i][1]
+                    if 0 <= x2 < grid.shape[1] and 0 <= y2 < grid.shape[0]:
+                        if closed[y2, x2] == 0 and grid[y2, x2] == 1:
+                            g2 = g + cost
+                            if heuristic is not None:
+                                f2 = g2 + heuristic[y2, x2]
+                            else:
+                                f2 = g2
+                            open.append([f2, g2, y2, x2])
+                            closed[y2, x2] = 1
+                            # action to come here
+                            action[y2, x2] = i
+    y, x = goal
+    policy[y, x] = 1 
+    # reverse from goal
+    while y != init[0] or x != init[1]:
+        i = action[y, x]
+        y = y - delta[i, 0]
+        x = x - delta[i, 1]
+        policy[y, x] = 1
+         
+    return policy

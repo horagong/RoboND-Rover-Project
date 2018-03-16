@@ -15,6 +15,8 @@ from io import BytesIO, StringIO
 import json
 import pickle
 import matplotlib.image as mpimg
+import matplotlib.pyplot as plt
+import threading
 import time
 
 # Import functions for perception and decision making
@@ -40,36 +42,58 @@ class RoverState():
     def __init__(self):
         self.start_time = None # To record the start time of navigation
         self.total_time = None # To record total duration of naviagation
+
+        self.arrived = False 
         self.img = None # Current camera image
         self.pos = None # Current position (x, y)
+        self.start_pos = None
         self.yaw = None # Current yaw angle
+        self.prev_yaw = None
         self.pitch = None # Current pitch angle
         self.roll = None # Current roll angle
         self.vel = None # Current velocity
         self.steer = 0 # Current steering angle
+        self.steer_bais = 0
         self.throttle = 0 # Current throttle value
         self.brake = 0 # Current brake value
+
+        self.go_dirs = None
         self.nav_angles = None # Angles of navigable terrain pixels
         self.nav_dists = None # Distances of navigable terrain pixels
+        self.ret_angles = None
+        self.ret_dists = None
+        self.rock_angles = None
+        self.rock_dists = None
         self.ground_truth = ground_truth_3d # Ground truth worldmap
         self.mode = 'forward' # Current mode (can be forward or stop)
         self.throttle_set = 0.2 # Throttle setting when accelerating
         self.brake_set = 10 # Brake setting when braking
+
         # The stop_forward and go_forward fields below represent total count
         # of navigable terrain pixels.  This is a very crude form of knowing
         # when you can keep going and when you should stop.  Feel free to
         # get creative in adding new fields or modifying these!
-        self.stop_forward = 50 # Threshold to initiate stopping
-        self.go_forward = 500 # Threshold to go forward again
+        self.stop_forward = 10 # Threshold to initiate stopping, 50
+        self.go_forward = 30 # Threshold to go forward again, 500
         self.max_vel = 2 # Maximum velocity (meters/second)
+
         # Image output from perception step
         # Update this image to display your intermediate analysis steps
         # on screen in autonomous mode
         self.vision_image = np.zeros((160, 320, 3), dtype=np.float) 
+        self.vision_image2 = np.zeros((160, 320, 3), dtype=np.float) 
+        self.vision_visit = np.zeros((160, 320), dtype=np.float) 
+        self.vision_mask = np.zeros((160, 320), dtype=np.float) 
         # Worldmap
         # Update this image with the positions of navigable terrain
         # obstacles and rock samples
         self.worldmap = np.zeros((200, 200, 3), dtype=np.float) 
+        self.worldmap2 = np.zeros((200, 200, 3), dtype=np.uint8)
+        self.world_vis = np.zeros((200, 200), dtype=np.uint8)
+        self.world_ret = np.zeros((200, 200), dtype=np.uint8)
+        self.worldmap3 = np.zeros((200, 200, 3), dtype=np.uint8)
+        self.world_start_pos = np.zeros((200, 200), dtype=np.uint8)
+        self.world_current_pos = np.zeros((200, 200), dtype=np.uint8)
         self.samples_pos = None # To store the actual sample positions
         self.samples_to_find = 0 # To store the initial count of samples
         self.samples_located = 0 # To store number of samples located on map
@@ -77,6 +101,10 @@ class RoverState():
         self.near_sample = 0 # Will be set to telemetry value data["near_sample"]
         self.picking_up = 0 # Will be set to telemetry value data["picking_up"]
         self.send_pickup = False # Set to True to trigger rock pickup
+
+        self.axis = plt.figure().add_subplot(111)
+        self.axisImage = self.axis.imshow(self.worldmap2.astype(np.uint8), vmin=0, vmax=255)
+
 # Initialize our rover 
 Rover = RoverState()
 
@@ -99,7 +127,7 @@ def telemetry(sid, data):
         fps = frame_counter
         frame_counter = 0
         second_counter = time.time()
-    print("Current FPS: {}".format(fps))
+        #XXX print("Current FPS: {}".format(fps))
 
     if data:
         global Rover
