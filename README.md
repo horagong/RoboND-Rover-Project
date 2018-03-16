@@ -65,7 +65,7 @@ process_image() is the process pipe line.
 
 
 The result image are following.
-<img src=output/test_mapping.gif>
+<img src=output/test_mapping2.gif>
 I 
 
 ## Autonomous Navigation and Mapping
